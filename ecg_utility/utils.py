@@ -6,7 +6,6 @@ import os
 # Libraries for de-noising ecg signal
 from scipy.signal import butter, iirnotch, lfilter
 import scipy.signal as signal
-import pywt
 
 # Libraries for peak detection
 from scipy.ndimage import label
@@ -57,14 +56,29 @@ df = pd.DataFrame(columns=['filename',
 
 
 def get_df():
+    """
+    Creates a new dataframe with the required columns for each lead of the 12 Lead ECG dataset
+    :return: A DataFrame with 17 columns (Age, Gender, Filename, Diagnoses, Signal, Each of the 12 leads)
+    """
     return df
 
 
 def get_extract_df():
+    """
+    Creates a new dataframe with 54 columns for each of the single value features extracted
+    :return: A DataFrame with 54 columns
+    """
     return pd.DataFrame(columns=columns)
 
 
 def butter_highpass(cutoff, fs_highpass, order_highpass):
+    """
+    Used to filter low frequency noise below a threshold cutoff frequency
+    :param cutoff: Threshold frequency
+    :param fs_highpass: Sampling rate
+    :param order_highpass:
+    :return: Returns the phase and magnitude information of the filtered signal
+    """
     nyq = 0.5 * fs_highpass
     normal_cutoff = cutoff / nyq
     b, a = butter(order_highpass, normal_cutoff, btype='high', analog=False, output='ba')
@@ -72,6 +86,13 @@ def butter_highpass(cutoff, fs_highpass, order_highpass):
 
 
 def butter_lowpass(cutoff, fs_lowpass, order_lowpass=5):
+    """
+    Used to filter high frequency noise above a threshold cutoff frequency
+    :param cutoff: Threshold frequency
+    :param fs_lowpass: Sampling rate
+    :param order_lowpass:
+    :return: Returns the phase and magnitude information of the filtered signal
+    """
     nyq = 0.5 * fs_lowpass
     normal_cutoff = cutoff / nyq
     b, a = butter(order_lowpass, normal_cutoff, btype='low', analog=False, output='ba')
@@ -79,6 +100,12 @@ def butter_lowpass(cutoff, fs_lowpass, order_lowpass=5):
 
 
 def notch_filter(cutoff, q):
+    """
+    Used to remove powerline noise, i.e. noise from other electrical devices nearby while the record was being taken
+    :param cutoff:
+    :param q:
+    :return:
+    """
     nyq = 0.5 * fs
     freq = cutoff / nyq
     b, a = iirnotch(freq, q)
@@ -189,12 +216,23 @@ class Read:
         self.ecg = loadmat(mat)
 
     def extract_info(self):
+        """
+        Reads relevant metadata from the header files
+        :return: Age, Gender and the Diagnoses
+        """
         age = str.rstrip(self.infile[13][6:])
         gender = self.infile[14][6]
         diag = str.rstrip(self.infile[15][5:])
         return age, gender, diag
 
     def insert_info(self, xdf):
+        """
+        Returns a dataframe with the relevant metadata along with the denoised ECG signal with each of the 12 leads.
+        Since the process is iterative and row wise, the dataframe is being input and appended row by row as every
+        record goes through the same processes.
+        :param xdf: A DataFrame for the the information to be stored in and returned
+        :return: DataFrame that was input but with an added row of the new record being read
+        """
         deno = Denoiser(5)
         age, gender, diag = self.extract_info()
         new_row = {'filename': self.mat,
@@ -238,6 +276,11 @@ class Encoder:
         return y, one_hot.classes_[0:-1]
 
     def snomed_codes(self):
+        """
+        Reads the codes given in the SNOMED Mappings dataframe and creates a dictionary with each of the diseases
+        mapped to their codes
+        :return:
+        """
         for j in range(27):
             self.d[self.mappings_scored.iloc[j]["SNOMED CT Code"]] = self.mappings_scored.iloc[j]["Dx"]
         keys_values = self.d.items()
@@ -362,12 +405,18 @@ class Extract:
         self.arbit_index = 3
 
     def feature_extraction(self, row):
-
+        """
+        Reads in the individual ECG record of a patient and performs feature extraction (peak detection, segmentation
+        calculating rr intervals).
+        :param row: A single lead ECG record of one patient
+        :return: Indexes of the 50 samples post segmentation and the 4 temporal features (global, pre, post and local
+        rr intervals in that order)
+        """
         for start, stop in get_plot_ranges(self.sampfrom, self.sampto, self.nr_plots):
             cond_slice = (self.index_ecg >= start) & (self.index_ecg < stop)
             ecg_slice = row[cond_slice]
 
-        #ecg_slice = Denoiser(3).final_filter(ecg_slice)  # Originally order = 3 for prev result
+        # ecg_slice = Denoiser(3).final_filter(ecg_slice)  # Originally order = 3 for prev result
 
         # Getting peaks and the rr interval
 
@@ -438,6 +487,10 @@ class MLmodel:
         self.model = model
 
     def obtain_model_input(self):
+        """
+        Returns the training data and its corresponding labels in a format ready as input to the model
+        :return: X the training data and y the labels
+        """
         lead_df = pd.DataFrame(columns=columns)
 
         for i in range(len(self.data[self.lead_name])):
@@ -466,11 +519,17 @@ class MLmodel:
         y = lead_df['bradycardia']
         X = lead_df.drop(columns=['bradycardia'])
 
-        #X, y = ros.fit_resample(X, y)
+        # X, y = ros.fit_resample(X, y)
 
         return X, y
 
     def test_model(self):
+        """
+        Splits the input data into training and test at 80/20. The model is then fit on the training data and
+        predicts on the testing data. The predicted labels are compared with the true labels using a classification
+        report and a confusion matrix is also plotted
+        :return: Prints the classification report and plots a confusion matrix
+        """
         X, y = self.obtain_model_input()
         X_train, X_test, y_train, y_test = train_test_split(X, y,
                                                             test_size=0.2,
